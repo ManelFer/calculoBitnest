@@ -6,15 +6,19 @@ import { Button } from "@/components/ui/button"
 import {
   Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table"
+import { Trash2 } from "lucide-react"
+import Version from "../version/page"
+import Link from "next/link"
 
 type Wallet = {
   id: number
   name: string
   initialValue: number
-  balance: number
   sources: number[]
-  history?: number[] // histórico de saldos
-  commissionsHistory?: number[]
+  history: number[]
+  lucro24History: number[]
+  commission20History: number[]
+  commission10History: number[]
 }
 
 export default function WalletBitnest() {
@@ -23,26 +27,29 @@ export default function WalletBitnest() {
   const [cycles, setCycles] = useState(12)
   const [newWallet, setNewWallet] = useState({ name: "", value: "" })
 
-  // carregar carteiras do localStorage
+  // carregar do localStorage
   useEffect(() => {
-    const saved = localStorage.getItem("bitnest_wallets")
+    const saved = localStorage.getItem("bitnest_wallets_cycles")
     if (saved) setWallets(JSON.parse(saved))
   }, [])
 
   // salvar ao alterar
   useEffect(() => {
-    localStorage.setItem("bitnest_wallets", JSON.stringify(wallets))
+    localStorage.setItem("bitnest_wallets_cycles", JSON.stringify(wallets))
   }, [wallets])
 
   function addWallet() {
     if (!newWallet.name || !newWallet.value) return
+    const value = parseFloat(newWallet.value)
     const wallet: Wallet = {
       id: Date.now(),
       name: newWallet.name,
-      initialValue: parseFloat(newWallet.value),
-      balance: parseFloat(newWallet.value),
+      initialValue: value,
       sources: [],
-      history: [parseFloat(newWallet.value)],
+      history: [value],
+      lucro24History: [0],
+      commission20History: [0],
+      commission10History: [0],
     }
     setWallets([...wallets, wallet])
     setNewWallet({ name: "", value: "" })
@@ -62,47 +69,53 @@ export default function WalletBitnest() {
     setWallets(updated)
   }
 
-  // simular rendimento e comissões
   function simulate() {
     const updated = wallets.map((w) => ({
       ...w,
-      balance: w.initialValue,
       history: [w.initialValue],
-      commissionsHistory: [0],
+      lucro24History: [0],
+      commission20History: [0],
+      commission10History: [0],
     }))
 
-    for (let i = 0; i < cycles; i++) {
-      // aplicar rendimento base
-      updated.forEach((w) => (w.balance += w.balance * (ratePct / 100)))
+    for (let i = 1; i <= cycles; i++) {
+      const lucro24: Record<number, number> = {}
+      const com20: Record<number, number> = {}
+      const com10: Record<number, number> = {}
 
-      // calcular comissões (20% do lucro do ciclo)
-      const commissions: Record<number, number> = {}
-      updated.forEach((secondary) => {
-        const lastBalance = secondary.history![secondary.history!.length - 1]
-        const profit = secondary.balance - lastBalance
-
-        const bonus = profit * 0.2
-
-        if (secondary.sources.length > 0) {
-          const share = bonus / secondary.sources.length
-
-          secondary.sources.forEach((sourceId) => {
-            commissions[sourceId] = (commissions[sourceId] || 0) + share
-          })
-        }
-      })
-
-      // aplicar comissões
-      Object.entries(commissions).forEach(([id, value]) => {
-        const target = updated.find((w) => w.id === Number(id))
-        if (target) target.balance += value
-        target?.commissionsHistory!.push(value)
-      })
-
-      // salvar histórico
+      // calcular lucro 24% para todos
       updated.forEach((w) => {
-        if (w.commissionsHistory!.length < i + 2) w.commissionsHistory!.push(0)
-        w.history!.push(w.balance)
+        const last = w.history[w.history.length - 1]
+        const lucro = last * (ratePct / 100)
+        lucro24[w.id] = lucro
+      })
+
+      // calcular comissões (não somar no saldo)
+      updated.forEach((child) => {
+        const profit = lucro24[child.id]
+        // quem indicou o child → ganha 20%
+        updated.forEach((parent) => {
+          if (parent.sources.includes(child.id)) {
+            com20[parent.id] = (com20[parent.id] || 0) + profit * 0.2
+
+            // quem indicou o parent → ganha 10%
+            updated.forEach((gp) => {
+              if (gp.sources.includes(parent.id)) {
+                com10[gp.id] = (com10[gp.id] || 0) + profit * 0.1
+              }
+            })
+          }
+        })
+      })
+
+      // registrar resultados por ciclo
+      updated.forEach((w) => {
+        const prev = w.history[w.history.length - 1]
+        const novoSaldo = prev + lucro24[w.id]
+        w.history.push(novoSaldo)
+        w.lucro24History.push(lucro24[w.id])
+        w.commission20History.push(com20[w.id] || 0)
+        w.commission10History.push(com10[w.id] || 0)
       })
     }
 
@@ -112,7 +125,14 @@ export default function WalletBitnest() {
   return (
     <div className="min-h-screen bg-slate-50 p-6 font-sans">
       <div className="max-w-6xl mx-auto bg-white rounded-lg shadow p-6">
-        <h1 className="text-3xl font-bold mb-4">Simulador de Carteiras BitNest</h1>
+        <div className="flex justify-between">
+          <h1 className="text-3xl font-bold mb-4">Simulador de Carteiras BitNest</h1>
+          <Link href="/version">
+            <button className="text-green-700 font-semibold hover:text-green-800 hover:underline hover:scale-105 duration-300">
+              V1.0.3
+            </button>
+          </Link>
+        </div>
 
         {/* Controles */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
@@ -135,13 +155,13 @@ export default function WalletBitnest() {
             />
           </div>
           <div className="flex items-end gap-2">
-            <Button onClick={simulate} className="bg-blue-600 text-white">Simular</Button>
+            <Button onClick={simulate} className="bg-blue-600 hover:bg-blue-700 hover:scale-105 duration-300 text-white">Simular</Button>
             <Button
               onClick={() => {
-                localStorage.removeItem("bitnest_wallets")
+                localStorage.removeItem("bitnest_wallets_cycles")
                 setWallets([])
               }}
-              className="bg-red-600 text-white"
+              className="bg-red-600 hover:bg-red-700 hover:scale-105 duration-300 text-white"
             >
               Limpar
             </Button>
@@ -165,7 +185,7 @@ export default function WalletBitnest() {
               onChange={(e) => setNewWallet({ ...newWallet, value: e.target.value })}
               className="mb-2"
             />
-            <Button onClick={addWallet} className="bg-green-600 text-white w-full">
+            <Button onClick={addWallet} className="bg-green-600 hover:bg-green-700 hover:scale-105 duration-300 text-white w-full">
               Adicionar
             </Button>
           </div>
@@ -178,14 +198,9 @@ export default function WalletBitnest() {
               <div key={w.id} className="flex justify-between items-center border-b py-2">
                 <div>
                   <p className="font-semibold">{w.name}</p>
-                  <p className="text-sm text-gray-600">Saldo: R$ {w.balance.toFixed(2)}</p>
+                  <p className="text-sm text-gray-600">Valor inicial: R$ {w.initialValue.toFixed(2)}</p>
                 </div>
-                <Button
-                  onClick={() => removeWallet(w.id)}
-                  className="bg-red-500 text-white"
-                >
-                  Remover
-                </Button>
+                <Trash2 onClick={() => removeWallet(w.id)} className="w-5 h-5 text-red-500 hover:scale-110 duration-300 cursor-pointer" />
               </div>
             ))}
           </div>
@@ -229,28 +244,28 @@ export default function WalletBitnest() {
             <div key={w.id} className="p-3 border rounded">
               <div className="flex justify-between mb-2">
                 <h3 className="font-semibold">{w.name}</h3>
-                <p>Final: R$ {w.balance.toFixed(2)}</p>
+                <p>Final (24%): R$ {w.history[w.history.length - 1].toFixed(2)}</p>
               </div>
+
               <Table>
-                <TableCaption>Histórico de rendimentos</TableCaption>
+                <TableCaption>Histórico de rendimentos (24%) e comissões</TableCaption>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Ciclo / mês </TableHead>
-                    <TableHead>Saldo (R$) + 24%</TableHead>
-                    <TableHead>Comissões (R$)</TableHead>
+                    <TableHead>Ciclo</TableHead>
+                    <TableHead>Lucro 24%</TableHead>
+                    <TableHead>Comissão 20%</TableHead>
+                    <TableHead>Comissão 10%</TableHead>
+                    <TableHead>Saldo Total</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {w.history?.map((val, i) => (
+                  {w.history.map((val, i) => (
                     <TableRow key={i}>
                       <TableCell>{i}</TableCell>
-                      <TableCell title={`Lucro de 24% neste ciclo: R$ ${i === 0 ? 0 : (val - (w.history?.[i - 1] ?? 0)).toFixed(2)}`}>{val.toFixed(2)}</TableCell>
-                      <TableCell>
-                        {w.commissionsHistory && w.commissionsHistory[i]
-                          ? w.commissionsHistory[i].toFixed(2)
-                          : "0.00"}
-
-                      </TableCell>
+                      <TableCell>{w.lucro24History[i]?.toFixed(2) || "0.00"}</TableCell>
+                      <TableCell>{w.commission20History[i]?.toFixed(2) || "0.00"}</TableCell>
+                      <TableCell>{w.commission10History[i]?.toFixed(2) || "0.00"}</TableCell>
+                      <TableCell>{val.toFixed(2)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
