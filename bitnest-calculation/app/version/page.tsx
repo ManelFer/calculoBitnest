@@ -2,6 +2,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
+import { url } from "inspector"
 
 export default function VersionPage() {
   const updates = [
@@ -66,7 +67,7 @@ export default function VersionPage() {
         ))}
 
         <p className="text-sm text-gray-500 text-center mt-6">
-          © {new Date().getFullYear()} BitNest — Registro de alterações do sistema.
+          © {new Date().getFullYear()} <a href="https://manoel-dev.vercel.app" className="hover:underline">Manoel DEV</a> — Registro de alterações do sistema.
         </p>
       </div>
     </div>
