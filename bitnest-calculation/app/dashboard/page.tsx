@@ -224,7 +224,7 @@ export default function WalletBitnest() {
                         }
                         className={
                           source.sources.includes(target.id)
-                            ? "bg-blue-500 text-white"
+                            ? "bg-blue-500 hover:bg-blue-600 text-white"
                             : "border-gray-400"
                         }
                         onClick={() => linkWallet(source.id, target.id)}
