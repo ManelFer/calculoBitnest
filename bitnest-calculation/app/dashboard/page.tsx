@@ -310,10 +310,10 @@ export default function WalletBitnest() {
               {w.withdrawals.length > 0 && (
                 <div className="mt-2 text-sm text-gray-700">
                   <p className="font-semibold">Retiradas:</p>
-                  <ul className="list-disc pl-5">
+                  <ul className="list-disc pl-5 text-red-600">
                     {w.withdrawals.map((wd, i) => (
                       <li key={i}>
-                        Ciclo {wd.cycle}: R$ {wd.amount.toFixed(2)}
+                        Ciclo {wd.cycle}: - R$  {wd.amount.toFixed(2)}
                       </li>
                     ))}
                   </ul>
