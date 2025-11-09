@@ -7,8 +7,9 @@ import {
   Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table"
 import { Trash2 } from "lucide-react"
-import Version from "../version/page"
 import Link from "next/link"
+
+type Withdrawal = { cycle: number; amount: number }
 
 type Wallet = {
   id: number
@@ -19,6 +20,7 @@ type Wallet = {
   lucro24History: number[]
   commission20History: number[]
   commission10History: number[]
+  withdrawals: Withdrawal[]
 }
 
 export default function WalletBitnest() {
@@ -50,6 +52,7 @@ export default function WalletBitnest() {
       lucro24History: [0],
       commission20History: [0],
       commission10History: [0],
+      withdrawals: [],
     }
     setWallets([...wallets, wallet])
     setNewWallet({ name: "", value: "" })
@@ -69,8 +72,10 @@ export default function WalletBitnest() {
     setWallets(updated)
   }
 
-  function simulate() {
-    const updated = wallets.map((w) => ({
+  // Função principal de simulação (corrigida)
+  function simulate(baseWallets: Wallet[] = wallets) {
+    // 1. Clonar estado inicial
+    const updated = baseWallets.map((w) => ({
       ...w,
       history: [w.initialValue],
       lucro24History: [0],
@@ -78,27 +83,33 @@ export default function WalletBitnest() {
       commission10History: [0],
     }))
 
+    // 2. Rodar ciclos
     for (let i = 1; i <= cycles; i++) {
       const lucro24: Record<number, number> = {}
       const com20: Record<number, number> = {}
       const com10: Record<number, number> = {}
 
-      // calcular lucro 24% para todos
+      // 🔹 Aplicar retiradas ANTES de calcular o lucro
+      updated.forEach((w) => {
+        const last = w.history[w.history.length - 1]
+        const retirada = w.withdrawals.find((wd) => wd.cycle === i)
+        const saldoAposRetirada = retirada ? Math.max(last - retirada.amount, 0) : last
+        w.history[w.history.length - 1] = saldoAposRetirada
+      })
+
+      // 🔹 Calcular lucro de 24% com base no saldo após retirada
       updated.forEach((w) => {
         const last = w.history[w.history.length - 1]
         const lucro = last * (ratePct / 100)
         lucro24[w.id] = lucro
       })
 
-      // calcular comissões (não somar no saldo)
+      // 🔹 Calcular comissões (sem somar no saldo)
       updated.forEach((child) => {
         const profit = lucro24[child.id]
-        // quem indicou o child → ganha 20%
         updated.forEach((parent) => {
           if (parent.sources.includes(child.id)) {
             com20[parent.id] = (com20[parent.id] || 0) + profit * 0.2
-
-            // quem indicou o parent → ganha 10%
             updated.forEach((gp) => {
               if (gp.sources.includes(parent.id)) {
                 com10[gp.id] = (com10[gp.id] || 0) + profit * 0.1
@@ -108,7 +119,7 @@ export default function WalletBitnest() {
         })
       })
 
-      // registrar resultados por ciclo
+      // 🔹 Atualizar histórico
       updated.forEach((w) => {
         const prev = w.history[w.history.length - 1]
         const novoSaldo = prev + lucro24[w.id]
@@ -119,7 +130,21 @@ export default function WalletBitnest() {
       })
     }
 
+    // 3. Atualizar estado final
     setWallets(updated)
+    return updated
+  }
+
+
+  // Registrar retirada e recalcular tudo (corrigido)
+  function withdraw(walletId: number, cycle: number, amount: number) {
+    const newWallets = wallets.map((w) => {
+      if (w.id !== walletId) return w
+      const saldoCiclo = w.history[cycle]
+      if (!saldoCiclo || amount <= 0 || amount > saldoCiclo) return w
+      return { ...w, withdrawals: [...w.withdrawals, { cycle, amount }] }
+    })
+    simulate(newWallets)
   }
 
   return (
@@ -129,7 +154,7 @@ export default function WalletBitnest() {
           <h1 className="text-3xl font-bold mb-4">Simulador de Carteiras BitNest</h1>
           <Link href="/version">
             <button className="text-green-700 font-semibold hover:text-green-800 hover:underline hover:scale-105 duration-300">
-              V1.0.3
+              V1.0.4
             </button>
           </Link>
         </div>
@@ -155,7 +180,7 @@ export default function WalletBitnest() {
             />
           </div>
           <div className="flex items-end gap-2">
-            <Button onClick={simulate} className="bg-blue-600 hover:bg-blue-700 hover:scale-105 duration-300 text-white">Simular</Button>
+            <Button onClick={() => simulate()} className="bg-blue-600 hover:bg-blue-700 hover:scale-105 duration-300 text-white">Simular</Button>
             <Button
               onClick={() => {
                 localStorage.removeItem("bitnest_wallets_cycles")
@@ -246,6 +271,54 @@ export default function WalletBitnest() {
                 <h3 className="font-semibold">{w.name}</h3>
                 <p>Final (24%): R$ {w.history[w.history.length - 1].toFixed(2)}</p>
               </div>
+
+              <div className="flex items-end gap-2 mb-4">
+                <div>
+                  <Label htmlFor={`cycle-${w.id}`}>Ciclo</Label>
+                  <Input
+                    id={`cycle-${w.id}`}
+                    type="number"
+                    min={1}
+                    max={w.history.length - 1}
+                    placeholder="Ex: 3"
+                    onChange={(e) => (w as any).withdrawCycle = parseInt(e.target.value)}
+                    className="w-24"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor={`amount-${w.id}`}>Valor</Label>
+                  <Input
+                    id={`amount-${w.id}`}
+                    type="number"
+                    placeholder="Ex: 100"
+                    onChange={(e) => (w as any).withdrawAmount = parseFloat(e.target.value)}
+                    className="w-28"
+                  />
+                </div>
+                <Button
+                  onClick={() => {
+                    const c = (w as any).withdrawCycle || 0
+                    const a = (w as any).withdrawAmount || 0
+                    withdraw(w.id, c, a)
+                  }}
+                  className="bg-amber-500 hover:bg-amber-600 text-white"
+                >
+                  Retirar
+                </Button>
+              </div>
+
+              {w.withdrawals.length > 0 && (
+                <div className="mt-2 text-sm text-gray-700">
+                  <p className="font-semibold">Retiradas:</p>
+                  <ul className="list-disc pl-5">
+                    {w.withdrawals.map((wd, i) => (
+                      <li key={i}>
+                        Ciclo {wd.cycle}: R$ {wd.amount.toFixed(2)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               <Table>
                 <TableCaption>Histórico de rendimentos (24%) e comissões</TableCaption>
