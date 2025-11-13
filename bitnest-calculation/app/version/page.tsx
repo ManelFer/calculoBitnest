@@ -7,6 +7,13 @@ import { url } from "inspector"
 export default function VersionPage() {
   const updates = [
     {
+      version: "v1.0.6",
+      date: "12/11/2025",
+      changes: [
+        "Adicionado a função de vinculação.",
+      ],
+    },
+    {
       version: "v1.0.5",
       date: "12/11/2025",
       changes: [

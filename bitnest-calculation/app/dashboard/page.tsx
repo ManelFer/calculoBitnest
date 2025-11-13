@@ -18,7 +18,7 @@ type Wallet = {
   id: number
   name: string
   initialValue: number
-  sources: number[]
+  sources: number[] // Lista os IDs das carteiras INDICADAS por esta carteira (seus 'filhos')
   history: number[]
   lucro24History: number[]
   commission20History: number[]
@@ -36,6 +36,8 @@ export default function WalletBitnest() {
   // formulários para retirada e depósito
   const [withdrawForm, setWithdrawForm] = useState({ walletId: "", cycle: "", amount: "" })
   const [depositForm, setDepositForm] = useState({ walletId: "", cycle: "", amount: "" })
+  // NOVO: formulário para vincular carteiras
+  const [linkForm, setLinkForm] = useState({ sourceId: "", targetId: "" })
 
   // carregar do localStorage (compatibilidade: adiciona fields que faltam)
   useEffect(() => {
@@ -92,13 +94,13 @@ export default function WalletBitnest() {
   const removeWallet = (id: number) =>
     setWallets((prev) => prev.filter((w) => w.id !== id))
 
-  // vincular carteiras (mantido caso use)
+  // vincular carteiras (sourceId indica targetId)
   const linkWallet = (sourceId: number, targetId: number) => {
     if (sourceId === targetId) return
     setWallets((prev) =>
       prev.map((w) =>
         w.id === sourceId
-          ? { ...w, sources: [...new Set([...w.sources, targetId])] }
+          ? { ...w, sources: [...new Set([...w.sources, targetId])] } // source (indicador) adiciona target (indicado)
           : w
       )
     )
@@ -138,17 +140,26 @@ export default function WalletBitnest() {
 
       // 2) calcular lucro base (ratePct) sobre saldo após depósitos/retiradas
       updated.forEach((w) => {
+        // Usa o saldo após movimentações (que está no último slot do history)
         lucro24[w.id] = (w.history.at(-1) ?? 0) * (ratePct / 100)
       })
 
-      // 3) calcular comissões: 20% para parents (sobre lucro do child) e 10% para grandparents
+      // 3) calcular comissões: 
+      // Indicador Direto (Parent) ganha 20% do indicado (Child).
+      // Indicador Indireto (Grandparent) ganha 10% do indicado (Grandchild).
       updated.forEach((child) => {
-        const profit = lucro24[child.id] || 0
+        const profit = lucro24[child.id] || 0 // Lucro base do indicado (Child/Grandchild)
+
         updated.forEach((parent) => {
+          // Se o Parent indicou o Child (ou seja, Child é um indicado direto de Parent)
           if (parent.sources.includes(child.id)) {
+            // Parent ganha 20% do lucro do Child
             com20[parent.id] = (com20[parent.id] || 0) + profit * 0.2
+
             updated.forEach((gp) => {
+              // Se o Grandparent (gp) indicou o Parent
               if (gp.sources.includes(parent.id)) {
+                // Grandparent ganha 10% do lucro do Grandchild (child)
                 com10[gp.id] = (com10[gp.id] || 0) + profit * 0.1
               }
             })
@@ -211,6 +222,15 @@ export default function WalletBitnest() {
     addDeposit(id, cycle, amount)
     setDepositForm({ walletId: "", cycle: "", amount: "" })
   }
+  
+  // Handler para o formulário de vínculo
+  const handleLinkSubmit = () => {
+    const sourceId = parseInt(linkForm.sourceId)
+    const targetId = parseInt(linkForm.targetId)
+    if (!sourceId || !targetId) return
+    linkWallet(sourceId, targetId)
+    setLinkForm({ sourceId: "", targetId: "" })
+  }
 
   // dados para gráficos
   const growthData =
@@ -249,7 +269,7 @@ export default function WalletBitnest() {
             Simulador de Carteiras BitNest
           </h1>
           <Link href="/version" className="text-green-700 font-semibold hover:underline text-center">
-            V1.0.5
+            V1.0.6
           </Link>
         </header>
 
@@ -282,8 +302,8 @@ export default function WalletBitnest() {
           </div>
         </section>
 
-        {/* Adicionar Carteira / Retirada / Depósito */}
-        <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Adicionar Carteira / Vínculo / Retirada / Depósito */}
+        <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
           {/* Adicionar Carteira */}
           <div className="p-4 border rounded">
             <h2 className="text-lg font-semibold mb-2">Adicionar Carteira</h2>
@@ -291,6 +311,22 @@ export default function WalletBitnest() {
               <Input placeholder="Nome" value={newWallet.name} onChange={(e) => setNewWallet({ ...newWallet, name: e.target.value })} />
               <Input placeholder="Valor inicial" type="number" value={newWallet.value} onChange={(e) => setNewWallet({ ...newWallet, value: e.target.value })} />
               <Button onClick={addWallet} className="bg-green-600 hover:bg-green-700 text-white">Adicionar</Button>
+            </div>
+          </div>
+
+          {/* NOVO: Vincular Carteiras (Indicação) */}
+          <div className="p-4 border rounded">
+            <h2 className="text-lg font-semibold mb-2">Vincular Carteiras</h2>
+            <div className="flex flex-col gap-2">
+              <select className="border rounded px-2 py-1" value={linkForm.sourceId} onChange={(e) => setLinkForm({ ...linkForm, sourceId: e.target.value })}>
+                <option value="">Selecione o Indicador</option>
+                {wallets.map((w) => <option key={w.id} value={String(w.id)}>{w.name}</option>)}
+              </select>
+              <select className="border rounded px-2 py-1" value={linkForm.targetId} onChange={(e) => setLinkForm({ ...linkForm, targetId: e.target.value })}>
+                <option value="">Selecione o Indicado</option>
+                {wallets.map((w) => <option key={w.id} value={String(w.id)}>{w.name}</option>)}
+              </select>
+              <Button onClick={handleLinkSubmit} className="bg-purple-600 hover:bg-purple-700 text-white">Vincular</Button>
             </div>
           </div>
 
@@ -322,6 +358,8 @@ export default function WalletBitnest() {
             </div>
           </div>
         </section>
+
+        
 
         {/* Gráfico de Crescimento */}
         {growthData.length > 0 && (
@@ -368,17 +406,17 @@ export default function WalletBitnest() {
                         const com20 = w.commission20History[i] ?? 0
                         const com10 = w.commission10History[i] ?? 0
                         const totalComissao = com20 + com10
-                        const totalRendimento =  totalComissao
+                        const totalRendimento = totalComissao
                         return (
                           <TableCell key={w.id}>
                             <div className="flex flex-col text-sm">
                               <span className="font-medium">{saldo.toFixed(2)}</span>
                               {i > 0 && (
                                 <>
-                                  <span className="text-green-600">+{lucro24.toFixed(2)} (24%)</span>
-                                  <span className="text-blue-600">+{com20.toFixed(2)} (20%)</span>
-                                  <span className="text-yellow-600">+{com10.toFixed(2)} (10%)</span>
-                                  <span className="text-purple-700 font-semibold mt-1">Rendeu mês: {totalRendimento.toFixed(2)}</span>
+                                  <span className="text-green-600">+{lucro24.toFixed(2)} (Lucro {ratePct}%)</span>
+                                  <span className="text-blue-600">+{com20.toFixed(2)} (Comissão 20%)</span>
+                                  <span className="text-yellow-600">+{com10.toFixed(2)} (Comissão 10%)</span>
+                                  <span className="text-purple-700 font-semibold mt-1">Rendeu ciclo: {totalRendimento.toFixed(2)}</span>
                                 </>
                               )}
                             </div>
@@ -463,12 +501,12 @@ export default function WalletBitnest() {
                   <YAxis />
                   <Tooltip />
                   <Legend />
-                  <Bar dataKey="com20" fill="#3b82f6" name="Comissão 20%" />
-                  <Bar dataKey="com10" fill="#f59e0b" name="Comissão 10%" />
+                  <Bar dataKey="com20" fill="#3b82f6" name="Comissão 20% (Direta)" />
+                  <Bar dataKey="com10" fill="#f59e0b" name="Comissão 10% (Indireta)" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
-            <p className="text-right font-semibold mt-2">Total Geral: R$ {totalCommissions.toFixed(2)}</p>
+            <p className="text-right font-semibold mt-2">Total Geral de Comissões: R$ {totalCommissions.toFixed(2)}</p>
           </section>
         )}
       </div>
