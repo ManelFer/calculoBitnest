@@ -39,6 +39,14 @@ export default function WalletBitnest() {
   // NOVO: formulário para vincular carteiras
   const [linkForm, setLinkForm] = useState({ sourceId: "", targetId: "" })
 
+  // ---------- LOADING STATES (por botão) ----------
+  const [loadingSimular, setLoadingSimular] = useState(false)
+  const [loadingLimpar, setLoadingLimpar] = useState(false)
+  const [loadingAddWallet, setLoadingAddWallet] = useState(false)
+  const [loadingLink, setLoadingLink] = useState(false)
+  const [loadingWithdraw, setLoadingWithdraw] = useState(false)
+  const [loadingDeposit, setLoadingDeposit] = useState(false)
+
   // carregar do localStorage (compatibilidade: adiciona fields que faltam)
   useEffect(() => {
     const saved = localStorage.getItem("bitnest_wallets_cycles")
@@ -170,7 +178,7 @@ export default function WalletBitnest() {
       // 4) atualizar histórico com lucro + comissões recebidas (comissões são recebidas neste ciclo)
       updated.forEach((w) => {
         const prev = w.history.at(-1) ?? 0
-        const newBalance = prev + (lucro24[w.id] || 0) + (com20[w.id] || 0) + (com10[w.id] || 0)
+        const newBalance = prev + (lucro24[w.id] || 0)
         w.history.push(newBalance)
         w.lucro24History.push(lucro24[w.id] || 0)
         w.commission20History.push(com20[w.id] || 0)
@@ -222,7 +230,7 @@ export default function WalletBitnest() {
     addDeposit(id, cycle, amount)
     setDepositForm({ walletId: "", cycle: "", amount: "" })
   }
-  
+
   // Handler para o formulário de vínculo
   const handleLinkSubmit = () => {
     const sourceId = parseInt(linkForm.sourceId)
@@ -252,6 +260,19 @@ export default function WalletBitnest() {
     0
   )
 
+  // comissões por ciclo -
+  const totalCommissionsPerCycle = Array.from({ length: cycles + 1 }, (_, i) => {
+    const cycleTotal = wallets.reduce((total, w) => {
+      const com20 = w.commission20History[i] ?? 0
+      const com10 = w.commission10History[i] ?? 0
+      return total + com20 + com10
+    }, 0)
+    return {
+      cycle: i,
+      totalCommission: cycleTotal,
+    }
+  }).filter(item => item.cycle > 0)
+
   // histórico global (listas planas) para exibir em tabelas separadas
   const withdrawalsHistory = wallets.flatMap((w) =>
     w.withdrawals.map((r) => ({ walletName: w.name, cycle: r.cycle, amount: r.amount }))
@@ -260,6 +281,9 @@ export default function WalletBitnest() {
   const depositsHistory = wallets.flatMap((w) =>
     w.deposits.map((d) => ({ walletName: w.name, cycle: d.cycle, amount: d.amount }))
   ).sort((a, b) => a.cycle - b.cycle)
+
+  // util: small delay so loading is visible
+  const shortWait = (ms = 300) => new Promise((r) => setTimeout(r, ms))
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 font-sans">
@@ -285,19 +309,29 @@ export default function WalletBitnest() {
           </div>
           <div className="flex gap-2 items-end">
             <Button
-              onClick={() => simulate()}
+              onClick={async () => {
+                setLoadingSimular(true)
+                await shortWait()
+                simulate()
+                setLoadingSimular(false)
+              }}
+              disabled={loadingSimular}
               className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-1.5 px-3 rounded-md transition-all duration-300"
             >
-              Simular
+              {loadingSimular ? "Simulando..." : "Simular"}
             </Button>
             <Button
-              onClick={() => {
+              onClick={async () => {
+                setLoadingLimpar(true)
+                await shortWait()
                 localStorage.removeItem("bitnest_wallets_cycles")
                 setWallets([])
+                setLoadingLimpar(false)
               }}
+              disabled={loadingLimpar}
               className="bg-red-600 hover:bg-red-700 text-white text-sm font-medium py-1.5 px-3 rounded-md transition-all duration-300"
             >
-              Limpar
+              {loadingLimpar ? "Limpando..." : "Limpar"}
             </Button>
           </div>
         </section>
@@ -310,7 +344,18 @@ export default function WalletBitnest() {
             <div className="flex flex-col gap-2">
               <Input placeholder="Nome" value={newWallet.name} onChange={(e) => setNewWallet({ ...newWallet, name: e.target.value })} />
               <Input placeholder="Valor inicial" type="number" value={newWallet.value} onChange={(e) => setNewWallet({ ...newWallet, value: e.target.value })} />
-              <Button onClick={addWallet} className="bg-green-600 hover:bg-green-700 text-white">Adicionar</Button>
+              <Button
+                onClick={async () => {
+                  setLoadingAddWallet(true)
+                  await shortWait()
+                  addWallet()
+                  setLoadingAddWallet(false)
+                }}
+                disabled={loadingAddWallet}
+                className="bg-green-600 hover:bg-green-700 text-white"
+              >
+                {loadingAddWallet ? "Adicionando..." : "Adicionar"}
+              </Button>
             </div>
           </div>
 
@@ -326,9 +371,21 @@ export default function WalletBitnest() {
                 <option value="">Selecione o Indicado</option>
                 {wallets.map((w) => <option key={w.id} value={String(w.id)}>{w.name}</option>)}
               </select>
-              <Button onClick={handleLinkSubmit} className="bg-purple-600 hover:bg-purple-700 text-white">Vincular</Button>
+              <Button
+                onClick={async () => {
+                  setLoadingLink(true)
+                  await shortWait()
+                  handleLinkSubmit()
+                  setLoadingLink(false)
+                }}
+                disabled={loadingLink}
+                className="bg-purple-600 hover:bg-purple-700 text-white"
+              >
+                {loadingLink ? "Vinculando..." : "Vincular"}
+              </Button>
             </div>
           </div>
+
 
           {/* Retirada */}
           <div className="p-4 border rounded">
@@ -340,7 +397,18 @@ export default function WalletBitnest() {
               </select>
               <Input placeholder="Ciclo" type="number" value={withdrawForm.cycle} onChange={(e) => setWithdrawForm({ ...withdrawForm, cycle: e.target.value })} />
               <Input placeholder="Valor" type="number" value={withdrawForm.amount} onChange={(e) => setWithdrawForm({ ...withdrawForm, amount: e.target.value })} />
-              <Button onClick={handleWithdrawSubmit} className="bg-orange-600 hover:bg-orange-700 text-white">Retirar</Button>
+              <Button
+                onClick={async () => {
+                  setLoadingWithdraw(true)
+                  await shortWait()
+                  handleWithdrawSubmit()
+                  setLoadingWithdraw(false)
+                }}
+                disabled={loadingWithdraw}
+                className="bg-orange-600 hover:bg-orange-700 text-white"
+              >
+                {loadingWithdraw ? "Retirando..." : "Retirar"}
+              </Button>
             </div>
           </div>
 
@@ -354,12 +422,23 @@ export default function WalletBitnest() {
               </select>
               <Input placeholder="Ciclo" type="number" value={depositForm.cycle} onChange={(e) => setDepositForm({ ...depositForm, cycle: e.target.value })} />
               <Input placeholder="Valor" type="number" value={depositForm.amount} onChange={(e) => setDepositForm({ ...depositForm, amount: e.target.value })} />
-              <Button onClick={handleDepositSubmit} className="bg-emerald-600 hover:bg-emerald-700 text-white">Adicionar</Button>
+              <Button
+                onClick={async () => {
+                  setLoadingDeposit(true)
+                  await shortWait()
+                  handleDepositSubmit()
+                  setLoadingDeposit(false)
+                }}
+                disabled={loadingDeposit}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+              >
+                {loadingDeposit ? "Adicionando..." : "Adicionar"}
+              </Button>
             </div>
           </div>
         </section>
 
-        
+
 
         {/* Gráfico de Crescimento */}
         {growthData.length > 0 && (
@@ -378,6 +457,36 @@ export default function WalletBitnest() {
                   ))}
                 </LineChart>
               </ResponsiveContainer>
+            </div>
+          </section>
+        )}
+
+        {/* comissoes por ciclo */}
+        {totalCommissionsPerCycle.length > 0 && (
+          <section className="p-4 border rounded bg-slate-50 overflow-x-auto">
+            <h2 className="text-xl font-bold mb-4">Total de Comissões por Ciclo</h2>
+            <div className="min-w-[400px]">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Ciclo</TableHead>
+                    <TableHead className="text-right">Total de Comissões (R$)</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {totalCommissionsPerCycle.map((data) => (
+                    <TableRow key={data.cycle}>
+                      <TableCell className="font-semibold">{data.cycle}</TableCell>
+                      <TableCell className="text-right font-medium text-purple-700">
+                        R$ {data.totalCommission.toFixed(2)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              <p className="text-right font-semibold mt-4">
+                Soma de todas as comissões (20% + 10%) de todas as carteiras em cada ciclo.
+              </p>
             </div>
           </section>
         )}
@@ -506,6 +615,8 @@ export default function WalletBitnest() {
                 </BarChart>
               </ResponsiveContainer>
             </div>
+            {/* Total geral de comissões por ciclo */}
+
             <p className="text-right font-semibold mt-2">Total Geral de Comissões: R$ {totalCommissions.toFixed(2)}</p>
           </section>
         )}
