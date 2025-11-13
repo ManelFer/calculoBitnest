@@ -4,12 +4,15 @@ import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import {
-  Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table"
 import { Trash2 } from "lucide-react"
 import Link from "next/link"
+import {
+  LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid, BarChart, Bar,
+} from "recharts"
 
-type Withdrawal = { cycle: number; amount: number }
+type Movement = { cycle: number; amount: number; note?: string } // usado para retirada e depósito
 
 type Wallet = {
   id: number
@@ -20,7 +23,8 @@ type Wallet = {
   lucro24History: number[]
   commission20History: number[]
   commission10History: number[]
-  withdrawals: Withdrawal[]
+  withdrawals: Movement[] // retiradas
+  deposits: Movement[] // adições
 }
 
 export default function WalletBitnest() {
@@ -29,23 +33,48 @@ export default function WalletBitnest() {
   const [cycles, setCycles] = useState(12)
   const [newWallet, setNewWallet] = useState({ name: "", value: "" })
 
-  // carregar do localStorage
+  // formulários para retirada e depósito
+  const [withdrawForm, setWithdrawForm] = useState({ walletId: "", cycle: "", amount: "" })
+  const [depositForm, setDepositForm] = useState({ walletId: "", cycle: "", amount: "" })
+
+  // carregar do localStorage (compatibilidade: adiciona fields que faltam)
   useEffect(() => {
     const saved = localStorage.getItem("bitnest_wallets_cycles")
-    if (saved) setWallets(JSON.parse(saved))
+    if (saved) {
+      try {
+        const parsed: Wallet[] = JSON.parse(saved)
+        // garantir campos novos
+        const normalized = parsed.map((w) => ({
+          ...w,
+          sources: w.sources ?? [],
+          history: w.history ?? [w.initialValue ?? 0],
+          lucro24History: w.lucro24History ?? [0],
+          commission20History: w.commission20History ?? [0],
+          commission10History: w.commission10History ?? [0],
+          withdrawals: w.withdrawals ?? [],
+          deposits: (w as any).deposits ?? [], // pode ser undefined em saves antigos
+        }))
+        setWallets(normalized)
+      } catch {
+        // ignore parse error
+        setWallets([])
+      }
+    }
   }, [])
 
-  // salvar ao alterar
+  // salvar no localStorage (serializa)
   useEffect(() => {
     localStorage.setItem("bitnest_wallets_cycles", JSON.stringify(wallets))
   }, [wallets])
 
-  function addWallet() {
+  // adicionar carteira
+  const addWallet = () => {
     if (!newWallet.name || !newWallet.value) return
     const value = parseFloat(newWallet.value)
+    if (Number.isNaN(value)) return
     const wallet: Wallet = {
       id: Date.now(),
-      name: newWallet.name,
+      name: newWallet.name.trim(),
       initialValue: value,
       sources: [],
       history: [value],
@@ -53,28 +82,31 @@ export default function WalletBitnest() {
       commission20History: [0],
       commission10History: [0],
       withdrawals: [],
+      deposits: [],
     }
-    setWallets([...wallets, wallet])
+    setWallets((prev) => [...prev, wallet])
     setNewWallet({ name: "", value: "" })
   }
 
-  function removeWallet(id: number) {
-    setWallets(wallets.filter((w) => w.id !== id))
-  }
+  // remover carteira
+  const removeWallet = (id: number) =>
+    setWallets((prev) => prev.filter((w) => w.id !== id))
 
-  function linkWallet(sourceId: number, targetId: number) {
+  // vincular carteiras (mantido caso use)
+  const linkWallet = (sourceId: number, targetId: number) => {
     if (sourceId === targetId) return
-    const updated = wallets.map((w) =>
-      w.id === sourceId
-        ? { ...w, sources: [...new Set([...w.sources, targetId])] }
-        : w
+    setWallets((prev) =>
+      prev.map((w) =>
+        w.id === sourceId
+          ? { ...w, sources: [...new Set([...w.sources, targetId])] }
+          : w
+      )
     )
-    setWallets(updated)
   }
 
-  // Função principal de simulação (corrigida)
-  function simulate(baseWallets: Wallet[] = wallets) {
-    // 1. Clonar estado inicial
+  // função principal: simula todos os ciclos com base em deposits e withdrawals por ciclo
+  const simulate = (baseWallets: Wallet[] = wallets) => {
+    // clone profundo superficial: arrays serão recriados
     const updated = baseWallets.map((w) => ({
       ...w,
       history: [w.initialValue],
@@ -83,30 +115,35 @@ export default function WalletBitnest() {
       commission10History: [0],
     }))
 
-    // 2. Rodar ciclos
     for (let i = 1; i <= cycles; i++) {
       const lucro24: Record<number, number> = {}
       const com20: Record<number, number> = {}
       const com10: Record<number, number> = {}
 
-      // 🔹 Aplicar retiradas ANTES de calcular o lucro
+      // 1) aplicar depósitos e retiradas programadas do ciclo i (antes do cálculo do rendimento)
       updated.forEach((w) => {
-        const last = w.history[w.history.length - 1]
-        const retirada = w.withdrawals.find((wd) => wd.cycle === i)
-        const saldoAposRetirada = retirada ? Math.max(last - retirada.amount, 0) : last
-        w.history[w.history.length - 1] = saldoAposRetirada
+        const last = w.history.at(-1) ?? 0
+        const retiradaTotal = w.withdrawals
+          .filter((r) => r.cycle === i)
+          .reduce((s, r) => s + (r.amount || 0), 0)
+        const depositoTotal = w.deposits
+          .filter((d) => d.cycle === i)
+          .reduce((s, d) => s + (d.amount || 0), 0)
+        // aplicar: depósitos aumentam capital, retiradas reduzem (não deixa negativo)
+        const afterDeposit = last + depositoTotal
+        const afterWithdraw = Math.max(afterDeposit - retiradaTotal, 0)
+        // atualiza o último slot (saldo antes do lucro do ciclo)
+        w.history[w.history.length - 1] = afterWithdraw
       })
 
-      // 🔹 Calcular lucro de 24% com base no saldo após retirada
+      // 2) calcular lucro base (ratePct) sobre saldo após depósitos/retiradas
       updated.forEach((w) => {
-        const last = w.history[w.history.length - 1]
-        const lucro = last * (ratePct / 100)
-        lucro24[w.id] = lucro
+        lucro24[w.id] = (w.history.at(-1) ?? 0) * (ratePct / 100)
       })
 
-      // 🔹 Calcular comissões (sem somar no saldo)
+      // 3) calcular comissões: 20% para parents (sobre lucro do child) e 10% para grandparents
       updated.forEach((child) => {
-        const profit = lucro24[child.id]
+        const profit = lucro24[child.id] || 0
         updated.forEach((parent) => {
           if (parent.sources.includes(child.id)) {
             com20[parent.id] = (com20[parent.id] || 0) + profit * 0.2
@@ -119,233 +156,321 @@ export default function WalletBitnest() {
         })
       })
 
-      // 🔹 Atualizar histórico
+      // 4) atualizar histórico com lucro + comissões recebidas (comissões são recebidas neste ciclo)
       updated.forEach((w) => {
-        const prev = w.history[w.history.length - 1]
-        const novoSaldo = prev + lucro24[w.id]
-        w.history.push(novoSaldo)
-        w.lucro24History.push(lucro24[w.id])
+        const prev = w.history.at(-1) ?? 0
+        const newBalance = prev + (lucro24[w.id] || 0) + (com20[w.id] || 0) + (com10[w.id] || 0)
+        w.history.push(newBalance)
+        w.lucro24History.push(lucro24[w.id] || 0)
         w.commission20History.push(com20[w.id] || 0)
         w.commission10History.push(com10[w.id] || 0)
       })
     }
 
-    // 3. Atualizar estado final
     setWallets(updated)
     return updated
   }
 
-
-  // Registrar retirada e recalcular tudo (corrigido)
-  function withdraw(walletId: number, cycle: number, amount: number) {
-    const newWallets = wallets.map((w) => {
-      if (w.id !== walletId) return w
-      const saldoCiclo = w.history[cycle]
-      if (!saldoCiclo || amount <= 0 || amount > saldoCiclo) return w
-      return { ...w, withdrawals: [...w.withdrawals, { cycle, amount }] }
-    })
-    simulate(newWallets)
+  // adicionar retirada programada (usa simulate para recalcular)
+  const addWithdrawal = (walletId: number, cycle: number, amount: number) => {
+    if (cycle < 1 || amount <= 0) return
+    const updated = wallets.map((w) =>
+      w.id === walletId
+        ? { ...w, withdrawals: [...w.withdrawals, { cycle, amount }] }
+        : w
+    )
+    simulate(updated)
   }
 
-  return (
-    <div className="min-h-screen bg-slate-50 p-6 font-sans">
-      <div className="max-w-6xl mx-auto bg-white rounded-lg shadow p-6">
-        <div className="flex justify-between">
-          <h1 className="text-3xl font-bold mb-4">Simulador de Carteiras BitNest</h1>
-          <Link href="/version">
-            <button className="text-green-700 font-semibold hover:text-green-800 hover:underline hover:scale-105 duration-300">
-              V1.0.4
-            </button>
-          </Link>
-        </div>
+  // adicionar depósito programado (usa simulate para recalcular)
+  const addDeposit = (walletId: number, cycle: number, amount: number) => {
+    if (cycle < 1 || amount <= 0) return
+    const updated = wallets.map((w) =>
+      w.id === walletId
+        ? { ...w, deposits: [...w.deposits, { cycle, amount }] }
+        : w
+    )
+    simulate(updated)
+  }
 
-        {/* Controles */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+  // handlers para os formulários
+  const handleWithdrawSubmit = () => {
+    const id = parseInt(withdrawForm.walletId)
+    const cycle = parseInt(withdrawForm.cycle)
+    const amount = parseFloat(withdrawForm.amount)
+    if (!id || !cycle || !amount || amount <= 0) return
+    addWithdrawal(id, cycle, amount)
+    setWithdrawForm({ walletId: "", cycle: "", amount: "" })
+  }
+
+  const handleDepositSubmit = () => {
+    const id = parseInt(depositForm.walletId)
+    const cycle = parseInt(depositForm.cycle)
+    const amount = parseFloat(depositForm.amount)
+    if (!id || !cycle || !amount || amount <= 0) return
+    addDeposit(id, cycle, amount)
+    setDepositForm({ walletId: "", cycle: "", amount: "" })
+  }
+
+  // dados para gráficos
+  const growthData =
+    wallets.length > 0
+      ? Array.from({ length: cycles + 1 }, (_, i) => ({
+        cycle: i,
+        ...Object.fromEntries(wallets.map((w) => [w.name, w.history[i] ?? 0])),
+      }))
+      : []
+
+  const commissionData = wallets.map((w) => ({
+    name: w.name,
+    com20: w.commission20History.reduce((a, b) => a + b, 0),
+    com10: w.commission10History.reduce((a, b) => a + b, 0),
+  }))
+
+  const totalCommissions = commissionData.reduce(
+    (sum, c) => sum + c.com20 + c.com10,
+    0
+  )
+
+  // histórico global (listas planas) para exibir em tabelas separadas
+  const withdrawalsHistory = wallets.flatMap((w) =>
+    w.withdrawals.map((r) => ({ walletName: w.name, cycle: r.cycle, amount: r.amount }))
+  ).sort((a, b) => a.cycle - b.cycle)
+
+  const depositsHistory = wallets.flatMap((w) =>
+    w.deposits.map((d) => ({ walletName: w.name, cycle: d.cycle, amount: d.amount }))
+  ).sort((a, b) => a.cycle - b.cycle)
+
+  return (
+    <div className="min-h-screen bg-slate-50 p-4 sm:p-6 font-sans">
+      <div className="max-w-7xl mx-auto bg-white rounded-lg shadow p-4 sm:p-6 space-y-8">
+        <header className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+          <h1 className="text-2xl sm:text-3xl font-bold text-center sm:text-left">
+            Simulador de Carteiras BitNest
+          </h1>
+          <Link href="/version" className="text-green-700 font-semibold hover:underline text-center">
+            V1.0.5
+          </Link>
+        </header>
+
+        {/* Controles (Taxa, Ciclos, Simular/Limpar) */}
+        <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
-            <Label htmlFor="ratePct">Taxa (%)</Label>
-            <Input
-              id="ratePct"
-              type="number"
-              value={ratePct}
-              onChange={(e) => setRatePct(parseFloat(e.target.value))}
-            />
+            <Label>Taxa (%)</Label>
+            <Input type="number" value={ratePct} onChange={(e) => setRatePct(parseFloat(e.target.value))} />
           </div>
           <div>
-            <Label htmlFor="cycles">Ciclos</Label>
-            <Input
-              id="cycles"
-              type="number"
-              value={cycles}
-              onChange={(e) => setCycles(parseInt(e.target.value))}
-            />
+            <Label>Ciclos</Label>
+            <Input type="number" value={cycles} onChange={(e) => setCycles(parseInt(e.target.value))} />
           </div>
-          <div className="flex items-end gap-2">
-            <Button onClick={() => simulate()} className="bg-blue-600 hover:bg-blue-700 hover:scale-105 duration-300 text-white">Simular</Button>
+          <div className="flex gap-2 items-end">
+            <Button
+              onClick={() => simulate()}
+              className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-1.5 px-3 rounded-md transition-all duration-300"
+            >
+              Simular
+            </Button>
             <Button
               onClick={() => {
                 localStorage.removeItem("bitnest_wallets_cycles")
                 setWallets([])
               }}
-              className="bg-red-600 hover:bg-red-700 hover:scale-105 duration-300 text-white"
+              className="bg-red-600 hover:bg-red-700 text-white text-sm font-medium py-1.5 px-3 rounded-md transition-all duration-300"
             >
               Limpar
             </Button>
           </div>
-        </div>
+        </section>
 
-        {/* Adicionar Carteira */}
-        <div className="grid md:grid-cols-2 gap-4 mb-6">
+        {/* Adicionar Carteira / Retirada / Depósito */}
+        <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Adicionar Carteira */}
           <div className="p-4 border rounded">
-            <h2 className="text-xl font-semibold mb-3">Adicionar Carteira</h2>
-            <Input
-              placeholder="Nome"
-              value={newWallet.name}
-              onChange={(e) => setNewWallet({ ...newWallet, name: e.target.value })}
-              className="mb-2"
-            />
-            <Input
-              placeholder="Valor inicial"
-              type="number"
-              value={newWallet.value}
-              onChange={(e) => setNewWallet({ ...newWallet, value: e.target.value })}
-              className="mb-2"
-            />
-            <Button onClick={addWallet} className="bg-green-600 hover:bg-green-700 hover:scale-105 duration-300 text-white w-full">
-              Adicionar
-            </Button>
+            <h2 className="text-lg font-semibold mb-2">Adicionar Carteira</h2>
+            <div className="flex flex-col gap-2">
+              <Input placeholder="Nome" value={newWallet.name} onChange={(e) => setNewWallet({ ...newWallet, name: e.target.value })} />
+              <Input placeholder="Valor inicial" type="number" value={newWallet.value} onChange={(e) => setNewWallet({ ...newWallet, value: e.target.value })} />
+              <Button onClick={addWallet} className="bg-green-600 hover:bg-green-700 text-white">Adicionar</Button>
+            </div>
           </div>
 
-          {/* Lista de carteiras */}
+          {/* Retirada */}
           <div className="p-4 border rounded">
-            <h2 className="text-xl font-semibold mb-3">Carteiras</h2>
-            {wallets.length === 0 && <p>Nenhuma carteira.</p>}
-            {wallets.map((w) => (
-              <div key={w.id} className="flex justify-between items-center border-b py-2">
-                <div>
-                  <p className="font-semibold">{w.name}</p>
-                  <p className="text-sm text-gray-600">Valor inicial: R$ {w.initialValue.toFixed(2)}</p>
-                </div>
-                <Trash2 onClick={() => removeWallet(w.id)} className="w-5 h-5 text-red-500 hover:scale-110 duration-300 cursor-pointer" />
-              </div>
-            ))}
+            <h2 className="text-lg font-semibold mb-2">Retirada</h2>
+            <div className="flex flex-col gap-2">
+              <select className="border rounded px-2 py-1" value={withdrawForm.walletId} onChange={(e) => setWithdrawForm({ ...withdrawForm, walletId: e.target.value })}>
+                <option value="">Selecione a carteira</option>
+                {wallets.map((w) => <option key={w.id} value={String(w.id)}>{w.name}</option>)}
+              </select>
+              <Input placeholder="Ciclo" type="number" value={withdrawForm.cycle} onChange={(e) => setWithdrawForm({ ...withdrawForm, cycle: e.target.value })} />
+              <Input placeholder="Valor" type="number" value={withdrawForm.amount} onChange={(e) => setWithdrawForm({ ...withdrawForm, amount: e.target.value })} />
+              <Button onClick={handleWithdrawSubmit} className="bg-orange-600 hover:bg-orange-700 text-white">Retirar</Button>
+            </div>
           </div>
-        </div>
 
-        {/* Vincular carteiras */}
-        {wallets.length > 1 && (
-          <div className="p-4 border rounded mb-6">
-            <h2 className="text-xl font-semibold mb-3">Vincular Carteiras</h2>
-            {wallets.map((source) => (
-              <div key={source.id} className="mb-2">
-                <p className="font-medium">{source.name} →</p>
-                <div className="flex gap-2 flex-wrap">
-                  {wallets
-                    .filter((w) => w.id !== source.id)
-                    .map((target) => (
-                      <Button
-                        key={target.id}
-                        variant={
-                          source.sources.includes(target.id) ? "default" : "outline"
-                        }
-                        className={
-                          source.sources.includes(target.id)
-                            ? "bg-blue-500 hover:bg-blue-600 text-white"
-                            : "border-gray-400"
-                        }
-                        onClick={() => linkWallet(source.id, target.id)}
-                      >
-                        {target.name}
-                      </Button>
-                    ))}
-                </div>
-              </div>
-            ))}
+          {/* Depósito */}
+          <div className="p-4 border rounded">
+            <h2 className="text-lg font-semibold mb-2">Adicionar Valor (Depósito)</h2>
+            <div className="flex flex-col gap-2">
+              <select className="border rounded px-2 py-1" value={depositForm.walletId} onChange={(e) => setDepositForm({ ...depositForm, walletId: e.target.value })}>
+                <option value="">Selecione a carteira</option>
+                {wallets.map((w) => <option key={w.id} value={String(w.id)}>{w.name}</option>)}
+              </select>
+              <Input placeholder="Ciclo" type="number" value={depositForm.cycle} onChange={(e) => setDepositForm({ ...depositForm, cycle: e.target.value })} />
+              <Input placeholder="Valor" type="number" value={depositForm.amount} onChange={(e) => setDepositForm({ ...depositForm, amount: e.target.value })} />
+              <Button onClick={handleDepositSubmit} className="bg-emerald-600 hover:bg-emerald-700 text-white">Adicionar</Button>
+            </div>
           </div>
+        </section>
+
+        {/* Gráfico de Crescimento */}
+        {growthData.length > 0 && (
+          <section className="p-4 border rounded bg-slate-50">
+            <h2 className="text-xl font-bold mb-4">Crescimento das Carteiras</h2>
+            <div className="w-full h-[300px] sm:h-[400px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={growthData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="cycle" />
+                  <YAxis />
+                  <Tooltip />
+                  <Legend />
+                  {wallets.map((w) => (
+                    <Line key={w.id} type="monotone" dataKey={w.name} strokeWidth={2} stroke={`hsl(${(w.id % 360)}, 70%, 50%)`} dot={false} />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
         )}
 
-        {/* Resultados */}
-        <div className="mt-6 space-y-6">
-          {wallets.map((w) => (
-            <div key={w.id} className="p-3 border rounded">
-              <div className="flex justify-between mb-2">
-                <h3 className="font-semibold">{w.name}</h3>
-                <p>Final (24%): R$ {w.history[w.history.length - 1].toFixed(2)}</p>
-              </div>
-
-              <div className="flex items-end gap-2 mb-4">
-                <div>
-                  <Label htmlFor={`cycle-${w.id}`}>Ciclo</Label>
-                  <Input
-                    id={`cycle-${w.id}`}
-                    type="number"
-                    min={1}
-                    max={w.history.length - 1}
-                    placeholder="Ex: 3"
-                    onChange={(e) => (w as any).withdrawCycle = parseInt(e.target.value)}
-                    className="w-24"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor={`amount-${w.id}`}>Valor</Label>
-                  <Input
-                    id={`amount-${w.id}`}
-                    type="number"
-                    placeholder="Ex: 100"
-                    onChange={(e) => (w as any).withdrawAmount = parseFloat(e.target.value)}
-                    className="w-28"
-                  />
-                </div>
-                <Button
-                  onClick={() => {
-                    const c = (w as any).withdrawCycle || 0
-                    const a = (w as any).withdrawAmount || 0
-                    withdraw(w.id, c, a)
-                  }}
-                  className="bg-amber-500 hover:bg-amber-600 text-white"
-                >
-                  Retirar
-                </Button>
-              </div>
-
-              {w.withdrawals.length > 0 && (
-                <div className="mt-2 text-sm text-gray-700">
-                  <p className="font-semibold">Retiradas:</p>
-                  <ul className="list-disc pl-5 text-red-600">
-                    {w.withdrawals.map((wd, i) => (
-                      <li key={i}>
-                        Ciclo {wd.cycle}: - R$  {wd.amount.toFixed(2)}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
+        {/* Tabela principal: rendimento e comissões */}
+        {wallets.length > 0 && (
+          <section className="p-4 border rounded bg-slate-50 overflow-x-auto">
+            <h2 className="text-xl font-bold mb-4">Rendimento e Comissões Detalhados</h2>
+            <div className="min-w-[900px]">
               <Table>
-                <TableCaption>Histórico de rendimentos (24%) e comissões</TableCaption>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Ciclo</TableHead>
-                    <TableHead>Lucro 24%</TableHead>
-                    <TableHead>Comissão 20%</TableHead>
-                    <TableHead>Comissão 10%</TableHead>
-                    <TableHead>Saldo Total</TableHead>
+                    {wallets.map((w) => (
+                      <TableHead key={w.id}>{w.name}</TableHead>
+                    ))}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {w.history.map((val, i) => (
+                  {Array.from({ length: cycles + 1 }, (_, i) => (
                     <TableRow key={i}>
-                      <TableCell>{i}</TableCell>
-                      <TableCell>{w.lucro24History[i]?.toFixed(2) || "0.00"}</TableCell>
-                      <TableCell>{w.commission20History[i]?.toFixed(2) || "0.00"}</TableCell>
-                      <TableCell>{w.commission10History[i]?.toFixed(2) || "0.00"}</TableCell>
-                      <TableCell>{val.toFixed(2)}</TableCell>
+                      <TableCell className="font-semibold">{i}</TableCell>
+                      {wallets.map((w) => {
+                        const saldo = w.history[i] ?? 0
+                        const lucro24 = w.lucro24History[i] ?? 0
+                        const com20 = w.commission20History[i] ?? 0
+                        const com10 = w.commission10History[i] ?? 0
+                        const totalComissao = com20 + com10
+                        const totalRendimento =  totalComissao
+                        return (
+                          <TableCell key={w.id}>
+                            <div className="flex flex-col text-sm">
+                              <span className="font-medium">{saldo.toFixed(2)}</span>
+                              {i > 0 && (
+                                <>
+                                  <span className="text-green-600">+{lucro24.toFixed(2)} (24%)</span>
+                                  <span className="text-blue-600">+{com20.toFixed(2)} (20%)</span>
+                                  <span className="text-yellow-600">+{com10.toFixed(2)} (10%)</span>
+                                  <span className="text-purple-700 font-semibold mt-1">Rendeu mês: {totalRendimento.toFixed(2)}</span>
+                                </>
+                              )}
+                            </div>
+                          </TableCell>
+                        )
+                      })}
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </div>
-          ))}
-        </div>
+          </section>
+        )}
+
+        {/* Histórico de Retiradas (tabela separada) */}
+        <section className="p-4 border rounded bg-slate-50 overflow-x-auto">
+          <h2 className="text-lg font-semibold mb-3">Histórico de Retiradas</h2>
+          {withdrawalsHistory.length === 0 ? (
+            <p className="text-sm text-gray-500">Nenhuma retirada registrada.</p>
+          ) : (
+            <div className="min-w-[600px]">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Carteira</TableHead>
+                    <TableHead>Ciclo</TableHead>
+                    <TableHead>Valor</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {withdrawalsHistory.map((r, idx) => (
+                    <TableRow key={idx}>
+                      <TableCell>{r.walletName}</TableCell>
+                      <TableCell>{r.cycle}</TableCell>
+                      <TableCell>R$ {r.amount.toFixed(2)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </section>
+
+        {/* Histórico de Depósitos (tabela separada) */}
+        <section className="p-4 border rounded bg-slate-50 overflow-x-auto">
+          <h2 className="text-lg font-semibold mb-3">Histórico de Depósitos</h2>
+          {depositsHistory.length === 0 ? (
+            <p className="text-sm text-gray-500">Nenhum depósito registrado.</p>
+          ) : (
+            <div className="min-w-[600px]">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Carteira</TableHead>
+                    <TableHead>Ciclo</TableHead>
+                    <TableHead>Valor</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {depositsHistory.map((d, idx) => (
+                    <TableRow key={idx}>
+                      <TableCell>{d.walletName}</TableCell>
+                      <TableCell>{d.cycle}</TableCell>
+                      <TableCell>R$ {d.amount.toFixed(2)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </section>
+
+        {/* Gráfico de Comissões */}
+        {commissionData.length > 0 && (
+          <section className="p-4 border rounded bg-slate-50">
+            <h2 className="text-xl font-bold mb-4">Comissões Totais</h2>
+            <div className="w-full h-[300px] sm:h-[400px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={commissionData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" />
+                  <YAxis />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="com20" fill="#3b82f6" name="Comissão 20%" />
+                  <Bar dataKey="com10" fill="#f59e0b" name="Comissão 10%" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <p className="text-right font-semibold mt-2">Total Geral: R$ {totalCommissions.toFixed(2)}</p>
+          </section>
+        )}
       </div>
     </div>
   )

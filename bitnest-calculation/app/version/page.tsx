@@ -7,6 +7,19 @@ import { url } from "inspector"
 export default function VersionPage() {
   const updates = [
     {
+      version: "v1.0.5",
+      date: "12/11/2025",
+      changes: [
+        "Adicionado a função de retirada.",
+        "Adicionado a função de depósito.",
+        "Adicionado a função de retirada.",
+        "Alteração da interface para melhor usabilidade.",
+        "Gráficos aprimorados.",
+        "Soma das comissões exibida no resumo.",
+
+      ],
+    },
+    {
       version: "v1.0.4",
       date: "09/11/2025",
       changes: [
